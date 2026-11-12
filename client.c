@@ -1,157 +1,142 @@
+/**
+ * Concurrent TCP Chat Client
+ * 
+ * Cross-platform TCP Chat Client for Windows and Linux/WSL.
+ * Supports simultaneous sending and receiving using threads (Windows)
+ * and select() / threads (Linux).
+ */
+
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
 typedef SSIZE_T ssize_t;
+typedef int socklen_t;
 #define close closesocket
+#define SOCK_TYPE SOCKET
 #else
 #include <arpa/inet.h>
 #include <netinet/in.h>
-#include <sys/select.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <pthread.h>
+#define SOCK_TYPE int
+#define INVALID_SOCKET (-1)
 #endif
 
-#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#define DEFAULT_IP "127.0.0.1"
+#define DEFAULT_PORT 9090
 #define BUFFER_SIZE 1024
 
-static volatile int running = 1;
+static volatile int is_running = 1;
 
 #ifdef _WIN32
-/* Thread that reads from the network and prints to screen */
-static DWORD WINAPI recv_thread(LPVOID arg)
+static DWORD WINAPI receive_worker(LPVOID arg)
+#else
+static void *receive_worker(void *arg)
+#endif
 {
-    int sock = *(int *)arg;
-    char buffer[BUFFER_SIZE + 1];
-    while (running) {
-        ssize_t n = recv(sock, buffer, BUFFER_SIZE, 0);
-        if (n <= 0) {
-            printf("\nServer disconnected.\n");
-            running = 0;
+    SOCK_TYPE sock = *(SOCK_TYPE *)arg;
+    char buffer[BUFFER_SIZE];
+
+    while (is_running) {
+        int bytes = recv(sock, buffer, BUFFER_SIZE - 1, 0);
+        if (bytes <= 0) {
+            if (is_running) {
+                printf("\n[Disconnected] Server closed the connection.\n");
+            }
+            is_running = 0;
             break;
         }
-        buffer[n] = '\0';
+        buffer[bytes] = '\0';
         printf("%s", buffer);
         fflush(stdout);
     }
     return 0;
 }
-#endif
 
 int main(int argc, char *argv[])
 {
-    #ifdef _WIN32
-    WSADATA wsaData;
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+    setvbuf(stdout, NULL, _IONBF, 0);
+
+#ifdef _WIN32
+    WSADATA wsa;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
         fprintf(stderr, "WSAStartup failed.\n");
         return 1;
     }
-    #endif
+#endif
 
-    if (argc != 3) {
-        printf("Usage: %s <server-ip> <port>\n", argv[0]);
+    const char *server_ip = (argc >= 2) ? argv[1] : DEFAULT_IP;
+    int port = (argc >= 3) ? atoi(argv[2]) : DEFAULT_PORT;
+
+    SOCK_TYPE sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock == INVALID_SOCKET) {
+        perror("Socket creation failed");
         return 1;
     }
 
-    int sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock < 0) { perror("socket"); return 1; }
+    struct sockaddr_in server_addr;
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons((unsigned short)port);
 
-    struct sockaddr_in server;
-    memset(&server, 0, sizeof(server));
-    server.sin_family = AF_INET;
-    server.sin_port = htons((unsigned short)atoi(argv[2]));
-
-    unsigned long address = inet_addr(argv[1]);
-    if (address == INADDR_NONE && strcmp(argv[1], "255.255.255.255") != 0) {
-        fprintf(stderr, "Invalid IPv4 address.\n");
-        close(sock); return 1;
+    unsigned long ip_bin = inet_addr(server_ip);
+    if (ip_bin == INADDR_NONE) {
+        fprintf(stderr, "Invalid IP address: %s\n", server_ip);
+        close(sock);
+        return 1;
     }
-    server.sin_addr.s_addr = address;
+    server_addr.sin_addr.s_addr = ip_bin;
 
-    if (connect(sock, (struct sockaddr *)&server, sizeof(server)) < 0) {
-        perror("connect"); close(sock); return 1;
+    printf("Connecting to %s:%d...\n", server_ip, port);
+    if (connect(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("Connection to server failed");
+        close(sock);
+        return 1;
     }
 
-    printf("Connected. Type messages and press Enter to send.\n");
+    printf("====================================================\n");
+    printf(" Connected to Chat Server (%s:%d)\n", server_ip, port);
+    printf(" Type messages and press Enter. Press Ctrl+C to quit.\n");
+    printf("====================================================\n");
 
 #ifdef _WIN32
-    /* On Windows: use a thread for receiving, main thread reads stdin */
-    HANDLE hThread = CreateThread(NULL, 0, recv_thread, &sock, 0, NULL);
-    if (!hThread) {
-        fprintf(stderr, "Failed to create receive thread.\n");
-        close(sock); return 1;
-    }
-
-    char buffer[BUFFER_SIZE];
-    while (running) {
-        if (fgets(buffer, sizeof(buffer), stdin) == NULL) break;
-
-        size_t length = strlen(buffer), sent = 0;
-        while (sent < length) {
-            ssize_t n = send(sock, buffer + sent, length - sent, 0);
-            if (n < 0) {
-                perror("send"); running = 0; break;
-            }
-            if (n == 0) { running = 0; break; }
-            sent += (size_t)n;
-        }
-    }
-
-    running = 0;
-    WaitForSingleObject(hThread, 1000);
-    CloseHandle(hThread);
+    HANDLE recv_thread = CreateThread(NULL, 0, receive_worker, &sock, 0, NULL);
 #else
-    /* On Linux: use select() on both stdin and socket */
-    while (1) {
-        fd_set read_fds;
-        FD_ZERO(&read_fds);
-        FD_SET(STDIN_FILENO, &read_fds);
-        FD_SET(sock, &read_fds);
-
-        int max_fd = (sock > STDIN_FILENO) ? sock : STDIN_FILENO;
-        int ready = select(max_fd + 1, &read_fds, NULL, NULL, NULL);
-        if (ready < 0) {
-            if (errno == EINTR) continue;
-            perror("select"); break;
-        }
-
-        if (FD_ISSET(sock, &read_fds)) {
-            char buffer[BUFFER_SIZE + 1];
-            ssize_t n = recv(sock, buffer, BUFFER_SIZE, 0);
-            if (n <= 0) {
-                printf("\nServer disconnected.\n");
-                break;
-            }
-            buffer[n] = '\0';
-            printf("%s", buffer);
-            fflush(stdout);
-        }
-
-        if (FD_ISSET(STDIN_FILENO, &read_fds)) {
-            char buffer[BUFFER_SIZE];
-            if (fgets(buffer, sizeof(buffer), stdin) == NULL) break;
-
-            size_t length = strlen(buffer), sent = 0;
-            while (sent < length) {
-                ssize_t n = send(sock, buffer + sent, length - sent, 0);
-                if (n < 0) {
-                    if (errno == EINTR) continue;
-                    perror("send"); close(sock); return 1;
-                }
-                if (n == 0) break;
-                sent += (size_t)n;
-            }
-        }
-    }
+    pthread_t recv_tid;
+    pthread_create(&recv_tid, NULL, receive_worker, &sock);
 #endif
 
+    char input[BUFFER_SIZE];
+    while (is_running && fgets(input, sizeof(input), stdin) != NULL) {
+        int len = (int)strlen(input);
+        if (len == 0) continue;
+
+        int sent = send(sock, input, len, 0);
+        if (sent <= 0) {
+            printf("\n[Disconnected] Failed to send message.\n");
+            break;
+        }
+    }
+
+    is_running = 0;
     close(sock);
-    #ifdef _WIN32
+
+#ifdef _WIN32
+    if (recv_thread) {
+        WaitForSingleObject(recv_thread, 500);
+        CloseHandle(recv_thread);
+    }
     WSACleanup();
-    #endif
+#else
+    pthread_cancel(recv_tid);
+    pthread_join(recv_tid, NULL);
+#endif
+
     return 0;
 }
