@@ -9,6 +9,50 @@ Includes a cross-platform client (`client.c`) and an in-depth technical analysis
 
 ---
 
+## System Architecture
+
+```mermaid
+flowchart TD
+    User(["Chat User"]):::userClass -->|"enters messages"| Client["Chat Client\n[client.c]"]:::clientClass
+
+    subgraph DefaultServer["Default Server"]
+        DefListener["Default Listener\n[server.c]"] -->|"spawns per client"| DefWorker["Client Worker\n[server.c]"]
+        DefConsole["Console Input\n[server.c]"] -->|"broadcasts console input"| DefBroadcast["Message Broadcast\n[server.c]"]
+        DefWorker -->|"broadcasts messages"| DefBroadcast
+    end
+
+    subgraph ServerVariants["Server Architecture Variants"]
+        subgraph ForkGroup["Fork-per-Client"]
+            ForkServ["Fork Server\n[server_fork.c]"] -->|"forks handler"| ForkHandler["Fork Client Handler\n[server_fork.c]"]
+            ForkServ -->|"registers sockets"| SharedTable[("Shared Client Table\n[server_fork.c]")]
+            ForkHandler -->|"reads and removes sockets"| SharedTable
+        end
+
+        subgraph SelectGroup["I/O Multiplexing"]
+            SelectServ["Select Server\n[server_select.c]"]
+        end
+
+        subgraph ThreadGroup["Thread-per-Client"]
+            ThreadServ["Thread Listener\n[server_thread.c]"] -->|"spawns per client"| ThreadWorker["Thread Worker\n[server_thread.c]"]
+            ThreadWorker -->|"broadcasts messages"| ThreadBroadcast["Thread Broadcast\n[server_thread.c]"]
+        end
+    end
+
+    Client -->|"connects to"| DefListener
+    DefBroadcast -->|"sends messages"| Client
+    Client -->|"connects to"| ForkServ
+    ForkHandler -->|"broadcasts messages"| Client
+    Client -->|"connects to"| SelectServ
+    SelectServ -->|"broadcasts messages"| Client
+    Client -->|"connects to"| ThreadServ
+    ThreadBroadcast -->|"sends messages"| Client
+
+    classDef userClass fill:#dbeafe,stroke:#3b82f6,stroke-width:2px;
+    classDef clientClass fill:#bfdbfe,stroke:#2563eb,stroke-width:2px;
+```
+
+---
+
 ## Project Structure
 
 ```
