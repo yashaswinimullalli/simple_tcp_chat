@@ -47,8 +47,8 @@ flowchart TD
     Client -->|"connects to"| ThreadServ
     ThreadBroadcast -->|"sends messages"| Client
 
-    classDef userClass fill:#dbeafe,stroke:#3b82f6,stroke-width:2px;
-    classDef clientClass fill:#bfdbfe,stroke:#2563eb,stroke-width:2px;
+    classDef userClass fill:#1e40af,stroke:#93c5fd,stroke-width:2px,color:#ffffff;
+    classDef clientClass fill:#1d4ed8,stroke:#60a5fa,stroke-width:2px,color:#ffffff;
 ```
 
 ---
