@@ -167,3 +167,4 @@ Modern production-grade servers (e.g., NGINX, Redis, Node.js) utilize $O(1)$ eve
 * **Choose `fork()`** when absolute fault isolation and security sandboxing are critical and connection counts remain small (e.g., legacy UNIX daemons, SSH sessions).
 * **Choose Thread-per-Client** for moderate concurrency where tasks involve blocking computations or when building cross-platform applications with shared in-memory state.
 * **Choose `select()` / `poll()`** for high-volume, I/O-bound connections where clients are mostly idle, memory efficiency is paramount, and lock-free simplicity is desired.
+

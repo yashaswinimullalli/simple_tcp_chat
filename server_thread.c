@@ -72,6 +72,15 @@ void remove_client(SOCK_TYPE sd)
     MUTEX_UNLOCK();
 }
 
+static unsigned long get_current_tid(void)
+{
+#ifdef _WIN32
+    return (unsigned long)GetCurrentThreadId();
+#else
+    return (unsigned long)pthread_self();
+#endif
+}
+
 #ifdef _WIN32
 static DWORD WINAPI handle_client(LPVOID arg)
 #else
@@ -81,16 +90,19 @@ static void *handle_client(void *arg)
     SOCK_TYPE sd = *(SOCK_TYPE *)arg;
     free(arg);
 
+    unsigned long tid = get_current_tid();
+    printf("  --> [Worker Thread ID: %lu] Assigned to Client (Socket %d)\n", tid, (int)sd);
+
     char buffer[BUFFER_SIZE];
     while (1) {
         int n = recv(sd, buffer, BUFFER_SIZE - 1, 0);
         if (n <= 0) {
-            printf("[Disconnected] Socket fd: %d\n", (int)sd);
+            printf("  <-- [Worker Thread ID: %lu] Client (Socket %d) disconnected.\n", tid, (int)sd);
             break;
         }
 
         buffer[n] = '\0';
-        printf("[Client %d]: %s", (int)sd, buffer);
+        printf("[Thread ID: %lu | Client %d]: %s", tid, (int)sd, buffer);
 
         char broadcast_msg[BUFFER_SIZE + 32];
         int msg_len = snprintf(broadcast_msg, sizeof(broadcast_msg),
@@ -145,6 +157,7 @@ int main(void)
 
     printf("====================================================\n");
     printf(" TCP Chat Server [Thread-per-Client]\n");
+    printf(" [Main Listener Thread ID: %lu]\n", get_current_tid());
     printf(" Listening on port %d...\n", PORT);
     printf("====================================================\n");
 
@@ -168,7 +181,10 @@ int main(void)
         client_sockets[client_count++] = new_sd;
         MUTEX_UNLOCK();
 
-        printf("[New Connection] Socket fd: %d (%d online)\n", (int)new_sd, client_count);
+        printf("\n[Main Thread ID: %lu] Accepted socket %d (%d clients online)\n",
+               get_current_tid(), (int)new_sd, client_count);
+        printf("[Main Thread ID: %lu] Spawning worker thread for socket %d...\n",
+               get_current_tid(), (int)new_sd);
 
         SOCK_TYPE *arg = malloc(sizeof(SOCK_TYPE));
         *arg = new_sd;

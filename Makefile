@@ -22,3 +22,4 @@ clean:
 	rm -f $(TARGETS) *.o *.exe server
 
 .PHONY: all clean
+
